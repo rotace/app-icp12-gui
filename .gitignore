@@ -1,0 +1,7 @@
+*.pyc
+*_ui.py
+*.xml
+*.log
+*.ini
+__pycache__/
+.*/
