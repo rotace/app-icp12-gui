@@ -2,6 +2,8 @@
 Main Program
 """
 import sys
+import time
+import re
 
 import serial
 import serial.tools.list_ports
@@ -14,8 +16,11 @@ from pyqtgraph import dockarea as pgda
 from pyqtgraph import parametertree as pgpt
 from pyqtgraph.parametertree import parameterTypes as pgptype
 
-global g_serial
 global g_state
+global g_sample_time
+g_state = None
+g_sample_time = 0.010
+
 
 class DeviceParameter(pgptype.GroupParameter):
     """
@@ -37,6 +42,7 @@ class DeviceParameter(pgptype.GroupParameter):
         self.p_btn  = self.param('  Connect  ')
         self.p_port = self.param('Port')
         self.p_btn.sigActivated.connect(self.connect)
+        self.usb_serial = None
 
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self.check_device)
@@ -48,30 +54,65 @@ class DeviceParameter(pgptype.GroupParameter):
             ports = [i for i in ports[0] if i.count('/dev/ttyACM')]
         self.p_port.setLimits(ports)
 
+    def has_serial(self):
+        return self.usb_serial is not None
+
     def connect(self):
-        global g_serial
         if self.p_btn.name() == '  Connect  ':
             port = self.p_port.value()
             ports = serial.tools.list_ports.comports()
             if ports and port in ports[0]:
-                g_serial = serial.Serial(port, 115200)
+                try:
+                    self.usb_serial = serial.Serial(port, 115200)
+                except serial.SerialException as e:
+                    print(e)
+                    return
                 self.p_btn.setName('  Disconnect  ')
                 self.sigConnectionChanged.emit(True)
             else:
-                g_serial = None
+                self.usb_serial = None
         else:
             self.p_btn.setName('  Connect  ')
             self.sigConnectionChanged.emit(False)
 
+    def send_and_recieve(self, commands):
+        if self.usb_serial is None:
+            return
+        for command in commands:
+            self.usb_serial.write(command)
+
+        messages = []
+        while self.usb_serial.inWaiting():
+            s = self.usb_serial.read()
+            s = s.decode('utf-8')
+            if   s == '<':
+                message = ''
+                message = s
+            elif s == '>':
+                message += s
+                messages.append(message)
+                message = ''
+            else:
+                message += s
+        return messages
+
 
 class PinTreeWidgetItem(pg.TreeWidgetItem):
     """
-    pin widget class
+    Pin Tree Widget Item
     """
-    def __init__(self, name, analog=True):
+    def __init__(self, name, analog=True, color='y'):
         super().__init__(name)
 
-        self.name = name[0]
+        self.name   = name[0]
+        self.color  = color
+        self.value  = None
+        self.values = np.zeros(int(1/g_sample_time))
+        self.values_index = 0
+        self.plotitem   = None
+        self.pin_letter = self.name[0]
+        self.pin_number = int(self.name[1])
+
         self.btn_type   = QtWidgets.QPushButton('Input')
         self.txt_status = QtWidgets.QLineEdit()
         self.cbx_analog = QtWidgets.QCheckBox()
@@ -82,16 +123,91 @@ class PinTreeWidgetItem(pg.TreeWidgetItem):
         self.setWidget(4, self.cbx_record)
 
         self.btn_type.setMaximumWidth(50)
+        self.btn_type.clicked.connect(self.change_type)
         self.txt_status.setMaximumWidth(50)
         self.txt_status.setReadOnly(True)
+        self.plt_status_red = self.txt_status.palette()
+        self.plt_status_red.setColor(QtGui.QPalette.Base, QtGui.QColor(255,0,0))
+        self.plt_status_grn = self.txt_status.palette()
+        self.plt_status_grn.setColor(QtGui.QPalette.Base, QtGui.QColor(57,255,20))
+        self.plt_status_wht = self.txt_status.palette()
+        self.plt_status_wht.setColor(QtGui.QPalette.Base, QtGui.QColor(255,255,255))
         self.cbx_analog.setEnabled(analog)
+        self.cbx_analog.clicked.connect(self.change_analog)
 
+    def change_analog(self):
+        if   self.btn_type.text() in 'Input,Output':
+            self.btn_type.setText('On')
+            self.txt_status.setPalette(self.plt_status_wht)
+        elif self.btn_type.text() in 'On,Off':
+            self.btn_type.setText('Input')
+
+    def change_type(self):
+        if   self.btn_type.text() == 'Input':
+            self.btn_type.setText('Output')
+        elif self.btn_type.text() == 'Output':
+            self.btn_type.setText('Input')
+        elif self.btn_type.text() == 'On':
+            self.btn_type.setText('Off')
+        elif self.btn_type.text() == 'Off':
+            self.btn_type.setText('On')
+            
+    def get_command(self):
+        if   self.btn_type.text() in 'On,Off':
+            return '(A{0}r)'.format(self.name)
+        elif self.btn_type.text() in 'Input,Output':
+            return '(DP{0})'.format(self.pin_letter)
+
+    def set_value(self, value):
+        if   isinstance(value, int) and self.btn_type.text() in 'Input,Output':
+            self.value = value
+            self.values[self.values_index] = self.value*5.0
+        elif isinstance(value, float) and self.btn_type.text() in 'On,Off':
+            self.value = value
+            self.values[self.values_index] = self.value
+        else:
+            return
+        self.values_index += 1
+        self.values_index = self.values_index % self.values.size
+        self.display()
+
+    def get_values(self):
+        return np.roll(self.values, -self.values_index)
+
+    def set_plotitem(self, plot_widget):
+        if plot_widget is None:
+            self.plotitem = None
+        else:
+            self.plotitem = plot_widget.plot(pen=self.color, name=self.name)
+
+    def get_plotitem(self):
+        return self.plotitem
+
+    def plot(self):
+        if self.plotitem is not None:
+            y = self.get_values()
+            x = np.arange(y.size)*g_sample_time
+            self.plotitem.setData(x=x, y=y)
+
+    def display(self):
+        if   isinstance(self.value, int) and self.value == 1:
+            self.txt_status.setText('High')
+            self.txt_status.setPalette(self.plt_status_red)
+        elif isinstance(self.value, int) and self.value == 0:
+            self.txt_status.setText('Low')
+            self.txt_status.setPalette(self.plt_status_grn)
+        elif isinstance(self.value, float):
+            self.txt_status.setText('%.3fV' % self.value)
+        else:
+            self.txt_status.setText('xxx')
+            self.txt_status.setPalette(self.plt_status_wht)
 
 
 class MainForm(QtWidgets.QMainWindow):
     """
     This is GUI main class.
     """
+    global g_sample_time
 
     def __init__(self):
         super().__init__()
@@ -111,46 +227,56 @@ class MainForm(QtWidgets.QMainWindow):
         self.area.addDock(d3, 'right')
 
         # Create Tree
-        a0 = PinTreeWidgetItem(["A0"])
-        a1 = PinTreeWidgetItem(["A1"])
-        a2 = PinTreeWidgetItem(["A2"])
-        a3 = PinTreeWidgetItem(["A3"])
-        a5 = PinTreeWidgetItem(["A5"])
+        a0 = PinTreeWidgetItem(["A0"], color='b')
+        a1 = PinTreeWidgetItem(["A1"], color='g')
+        a2 = PinTreeWidgetItem(["A2"], color='r')
+        a3 = PinTreeWidgetItem(["A3"], color='c')
+        a5 = PinTreeWidgetItem(["A5"], color='y')
         b0 = PinTreeWidgetItem(["B0"], analog=False)
         b1 = PinTreeWidgetItem(["B1"], analog=False)
-        b2 = PinTreeWidgetItem(["B2"])
+        b2 = PinTreeWidgetItem(["B2"], color='w')
         c0 = PinTreeWidgetItem(["C0"], analog=False)
         c1 = PinTreeWidgetItem(["C1"], analog=False)
         c2 = PinTreeWidgetItem(["C2"], analog=False)
         c6 = PinTreeWidgetItem(["C6"], analog=False)
         c7 = PinTreeWidgetItem(["C7"], analog=False)
 
-        t1 = pg.TreeWidget()
-        t1.setColumnCount(5)
-        t1.addTopLevelItem(a0)
-        t1.addTopLevelItem(a1)
-        t1.addTopLevelItem(a2)
-        t1.addTopLevelItem(a3)
-        t1.addTopLevelItem(a5)
-        t1.addTopLevelItem(b0)
-        t1.addTopLevelItem(b1)
-        t1.addTopLevelItem(b2)
-        t1.addTopLevelItem(c0)
-        t1.addTopLevelItem(c1)
-        t1.addTopLevelItem(c2)
-        t1.addTopLevelItem(c6)
-        t1.addTopLevelItem(c7)
-        t1.setHeaderLabels(["Name", "Type", "Status", "Analog", "Record"])
-        t1.header().setResizeMode(QtWidgets.QHeaderView.ResizeToContents)
-        # t1.header().setStretchLastSection(False)
-        d1.addWidget(t1)
-        t1.setEnabled(False)
+        self.t1 = pg.TreeWidget()
+        self.t1.setColumnCount(5)
+        self.t1.addTopLevelItem(a0)
+        self.t1.addTopLevelItem(a1)
+        self.t1.addTopLevelItem(a2)
+        self.t1.addTopLevelItem(a3)
+        self.t1.addTopLevelItem(a5)
+        self.t1.addTopLevelItem(b0)
+        self.t1.addTopLevelItem(b1)
+        self.t1.addTopLevelItem(b2)
+        self.t1.addTopLevelItem(c0)
+        self.t1.addTopLevelItem(c1)
+        self.t1.addTopLevelItem(c2)
+        self.t1.addTopLevelItem(c6)
+        self.t1.addTopLevelItem(c7)
+        [i.cbx_analog.clicked.connect(self.reg_plot) for i in self.t1.listAllItems() ]
+        self.t1.setHeaderLabels(["Name", "Type", "Status", "Analog", "Record"])
+        self.t1.header().setResizeMode(QtWidgets.QHeaderView.ResizeToContents)
+        # self.t1.header().setStretchLastSection(False)
+        d1.addWidget(self.t1)
+        self.t1.setEnabled(False)
+
+        # Create Graph
+        self.p2 = pg.PlotWidget(name='plot1')
+        self.p2.setLabel('left', 'Voltatge', units='V')
+        self.p2.setLabel('bottom', 'Time', units='s')
+        self.p2.setXRange(0,0.5)
+        self.p2.setYRange(-1, 6)
+        self.p2_leg = self.p2.addLegend()
+        d2.addWidget(self.p2)
 
         # Create ParamterTree
-        device_paramter = DeviceParameter(name='DEVICE')
-        device_paramter.sigConnectionChanged.connect(t1.setEnabled)
+        self.device_parameter = DeviceParameter(name='DEVICE')
+        self.device_parameter.sigConnectionChanged.connect(self.t1.setEnabled)
         params = [
-            device_paramter,
+            self.device_parameter,
             {'name': 'LOGGING', 'type': 'group', 'children': [
                 {'name': 'Dummy', 'type': 'list', 'values': ['1', '2'], 'value': '2'},
             ]},
@@ -193,8 +319,54 @@ class MainForm(QtWidgets.QMainWindow):
         t3.setWindowTitle('pyqtgraph example Parameter Tree')
         d3.addWidget(t3)
 
+        self.timer = QtCore.QTimer(self)
+        self.timer.timeout.connect(self.update)
+        self.timer.start(int(g_sample_time*1000))
+        self.timer_counter = 0
 
+    def reg_plot(self):
+        for pin_item in self.t1.listAllItems():
+            if   pin_item.cbx_analog.isChecked() and pin_item.get_plotitem() is None:
+                pin_item.set_plotitem(self.p2)
+            elif not pin_item.cbx_analog.isChecked() and pin_item.get_plotitem() is not None:
+                self.p2.removeItem(pin_item.get_plotitem())
+                self.p2_leg.removeItem(pin_item.name)
+                pin_item.set_plotitem(None)
 
+    def update(self):
+        if self.device_parameter.has_serial():
+            # send command and recieve message
+            commands = [ i.get_command().encode('utf-8') for i in self.t1.listAllItems() ]
+            commands = sorted(set(commands))
+            messages = self.device_parameter.send_and_recieve(commands)
+            for message in messages:
+                self.parse_message(message)
+
+            # plot graph
+            if self.timer_counter % int(0.1/g_sample_time):
+                pass
+            else:
+                [i.plot() for i in self.t1.listAllItems() ]
+            self.timer_counter += 1
+
+    def parse_message(self, message):
+        if   message[1]=='A' and message[4]=='r':
+            pin_name = message[2:4]
+            value = float(message[6:12])
+            value = 5.*value/1023
+            self.set_value(pin_name, value)
+        elif message[1:3]=='DP':
+            pin_letter = message[3]
+            for pin_number in range(8):
+                value = message[pin_number+4]
+                if value != 'x':
+                    pin_name = '{:s}{:d}'.format(pin_letter, pin_number)
+                    self.set_value(pin_name, int(value))
+
+    def set_value(self, pin_name, value):
+        pin_items = [ i for i in self.t1.listAllItems() if i.name == pin_name ]
+        for pin_item in pin_items:
+            pin_item.set_value(value)
 
     def change(self, param, changes):
         print("tree changes:")
