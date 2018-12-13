@@ -17,15 +17,20 @@ from pyqtgraph import parametertree as pgpt
 from pyqtgraph.parametertree import parameterTypes as pgptype
 
 global g_state
-global g_sample_time
+global g_samples
+global g_period
 g_state = None
-g_sample_time = 0.010
+g_samples = 100
+g_period = 1.0
+
 
 
 class DeviceParameter(pgptype.GroupParameter):
     """
     Device Parameter
     """
+    global g_samples
+    global g_period
     sigConnectionChanged = QtCore.pyqtSignal(bool)
 
     def __init__(self, **opts):
@@ -73,6 +78,7 @@ class DeviceParameter(pgptype.GroupParameter):
                 self.usb_serial = None
         else:
             self.p_btn.setName('  Connect  ')
+            self.usb_serial = None
             self.sigConnectionChanged.emit(False)
 
     def send_and_recieve(self, commands):
@@ -101,13 +107,15 @@ class PinTreeWidgetItem(pg.TreeWidgetItem):
     """
     Pin Tree Widget Item
     """
+    global g_samples
+
     def __init__(self, name, analog=True, color='y'):
         super().__init__(name)
 
         self.name   = name[0]
         self.color  = color
         self.value  = None
-        self.values = np.zeros(int(1/g_sample_time))
+        self.values = np.zeros(g_samples)
         self.values_index = 0
         self.plotitem   = None
         self.pin_letter = self.name[0]
@@ -186,7 +194,7 @@ class PinTreeWidgetItem(pg.TreeWidgetItem):
     def plot(self):
         if self.plotitem is not None:
             y = self.get_values()
-            x = np.arange(y.size)*g_sample_time
+            x = np.arange(y.size)*g_period
             self.plotitem.setData(x=x, y=y)
 
     def display(self):
@@ -207,7 +215,8 @@ class MainForm(QtWidgets.QMainWindow):
     """
     This is GUI main class.
     """
-    global g_sample_time
+    global g_samples
+    global g_period
 
     def __init__(self):
         super().__init__()
@@ -218,13 +227,13 @@ class MainForm(QtWidgets.QMainWindow):
         self.setWindowTitle('app-icp12-gui')
 
         # Create Docks
-        d1 = pgda.Dock("PORT", size=(300, 300))
-        d2 = pgda.Dock("GRAPH", size=(500, 300))
-        d3 = pgda.Dock("SETTING", size=(400, 300))
+        dock1 = pgda.Dock("PORT", size=(300, 300))
+        dock2 = pgda.Dock("GRAPH", size=(500, 300))
+        dock3 = pgda.Dock("SETTING", size=(400, 300))
         
-        self.area.addDock(d1, 'left')
-        self.area.addDock(d2, 'right')
-        self.area.addDock(d3, 'right')
+        self.area.addDock(dock1, 'left')
+        self.area.addDock(dock2, 'right')
+        self.area.addDock(dock3, 'right')
 
         # Create Tree
         a0 = PinTreeWidgetItem(["A0"], color='b')
@@ -241,40 +250,45 @@ class MainForm(QtWidgets.QMainWindow):
         c6 = PinTreeWidgetItem(["C6"], analog=False)
         c7 = PinTreeWidgetItem(["C7"], analog=False)
 
-        self.t1 = pg.TreeWidget()
-        self.t1.setColumnCount(5)
-        self.t1.addTopLevelItem(a0)
-        self.t1.addTopLevelItem(a1)
-        self.t1.addTopLevelItem(a2)
-        self.t1.addTopLevelItem(a3)
-        self.t1.addTopLevelItem(a5)
-        self.t1.addTopLevelItem(b0)
-        self.t1.addTopLevelItem(b1)
-        self.t1.addTopLevelItem(b2)
-        self.t1.addTopLevelItem(c0)
-        self.t1.addTopLevelItem(c1)
-        self.t1.addTopLevelItem(c2)
-        self.t1.addTopLevelItem(c6)
-        self.t1.addTopLevelItem(c7)
-        [i.cbx_analog.clicked.connect(self.reg_plot) for i in self.t1.listAllItems() ]
-        self.t1.setHeaderLabels(["Name", "Type", "Status", "Analog", "Record"])
-        self.t1.header().setResizeMode(QtWidgets.QHeaderView.ResizeToContents)
-        # self.t1.header().setStretchLastSection(False)
-        d1.addWidget(self.t1)
-        self.t1.setEnabled(False)
+        self.d1tree = pg.TreeWidget()
+        self.d1tree.setColumnCount(5)
+        self.d1tree.addTopLevelItem(a0)
+        self.d1tree.addTopLevelItem(a1)
+        self.d1tree.addTopLevelItem(a2)
+        self.d1tree.addTopLevelItem(a3)
+        self.d1tree.addTopLevelItem(a5)
+        self.d1tree.addTopLevelItem(b0)
+        self.d1tree.addTopLevelItem(b1)
+        self.d1tree.addTopLevelItem(b2)
+        self.d1tree.addTopLevelItem(c0)
+        self.d1tree.addTopLevelItem(c1)
+        self.d1tree.addTopLevelItem(c2)
+        self.d1tree.addTopLevelItem(c6)
+        self.d1tree.addTopLevelItem(c7)
+        [i.cbx_analog.clicked.connect(self.reg_plot) for i in self.d1tree.listAllItems() ]
+        self.d1tree.setHeaderLabels(["Name", "Type", "Status", "Analog", "Record"])
+        self.d1tree.header().setResizeMode(QtWidgets.QHeaderView.ResizeToContents)
+        # self.d1tree.header().setStretchLastSection(False)
+        dock1.addWidget(self.d1tree)
+        self.d1tree.setEnabled(False)
 
         # Create Graph
-        self.p2 = pg.PlotWidget(name='plot1')
-        self.p2.setLabel('left', 'Voltatge', units='V')
-        self.p2.setLabel('bottom', 'Time', units='s')
-        self.p2.setXRange(0,0.5)
-        self.p2.setYRange(-1, 6)
-        self.p2_leg = self.p2.addLegend()
-        d2.addWidget(self.p2)
+        d2view = pg.GraphicsView()
+        d2layout = pg.GraphicsLayout(border=(100,100,100))
+        d2view.setCentralItem(d2layout)
+        self.d2label = d2layout.addLabel("Plot")
+        d2layout.nextRow()
+        self.d2plot = d2layout.addPlot()
+        self.d2plot.setLabel('left', 'Voltatge', units='V')
+        self.d2plot.setLabel('bottom', 'Time', units='s')
+        self.d2plot.setXRange(0,0.5)
+        self.d2plot.setYRange(-1, 6)
+        self.d2plot_leg = self.d2plot.addLegend()
+        dock2.addWidget(d2view)
 
         # Create ParamterTree
         self.device_parameter = DeviceParameter(name='DEVICE')
-        self.device_parameter.sigConnectionChanged.connect(self.t1.setEnabled)
+        self.device_parameter.sigConnectionChanged.connect(self.d1tree.setEnabled)
         params = [
             self.device_parameter,
             {'name': 'LOGGING', 'type': 'group', 'children': [
@@ -304,49 +318,54 @@ class MainForm(QtWidgets.QMainWindow):
             ]},          
         ]
 
-        self.p3 = pgpt.Parameter.create(name='params', type='group', children=params)
-        self.p3.sigTreeStateChanged.connect(self.change)
-        for ch1 in self.p3.children():
+        self.d3param = pgpt.Parameter.create(name='params', type='group', children=params)
+        self.d3param.sigTreeStateChanged.connect(self.change)
+        for ch1 in self.d3param.children():
             ch1.sigValueChanging.connect(self.changing)
             for ch2 in ch1.children():
                 ch2.sigValueChanging.connect(self.changing)
         
-        self.p3.param('SAVE/LOAD', 'Save State').sigActivated.connect(self.save)
-        self.p3.param('SAVE/LOAD', 'Load State').sigActivated.connect(self.load)
+        self.d3param.param('SAVE/LOAD', 'Save State').sigActivated.connect(self.save)
+        self.d3param.param('SAVE/LOAD', 'Load State').sigActivated.connect(self.load)
 
-        t3 = pgpt.ParameterTree()
-        t3.setParameters(self.p3, showTop=False)
-        t3.setWindowTitle('pyqtgraph example Parameter Tree')
-        d3.addWidget(t3)
+        d3tree = pgpt.ParameterTree()
+        d3tree.setParameters(self.d3param, showTop=False)
+        d3tree.setWindowTitle('pyqtgraph example Parameter Tree')
+        dock3.addWidget(d3tree)
 
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self.update)
-        self.timer.start(int(g_sample_time*1000))
+        self.timer.start(0)
         self.timer_counter = 0
+        self.old_time = time.time()
 
     def reg_plot(self):
-        for pin_item in self.t1.listAllItems():
+        for pin_item in self.d1tree.listAllItems():
             if   pin_item.cbx_analog.isChecked() and pin_item.get_plotitem() is None:
-                pin_item.set_plotitem(self.p2)
+                pin_item.set_plotitem(self.d2plot)
             elif not pin_item.cbx_analog.isChecked() and pin_item.get_plotitem() is not None:
-                self.p2.removeItem(pin_item.get_plotitem())
-                self.p2_leg.removeItem(pin_item.name)
+                self.d2plot.removeItem(pin_item.get_plotitem())
+                self.d2plot_leg.removeItem(pin_item.name)
                 pin_item.set_plotitem(None)
 
     def update(self):
         if self.device_parameter.has_serial():
             # send command and recieve message
-            commands = [ i.get_command().encode('utf-8') for i in self.t1.listAllItems() ]
+            commands = [ i.get_command().encode('utf-8') for i in self.d1tree.listAllItems() ]
             commands = sorted(set(commands))
             messages = self.device_parameter.send_and_recieve(commands)
             for message in messages:
                 self.parse_message(message)
 
             # plot graph
-            if self.timer_counter % int(0.1/g_sample_time):
+            if self.timer_counter % (g_samples//100):
                 pass
             else:
-                [i.plot() for i in self.t1.listAllItems() ]
+                [i.plot() for i in self.d1tree.listAllItems()]
+                new_time = time.time()
+                g_period = (new_time-self.old_time)/(g_samples//100)
+                self.old_time = new_time
+                self.d2label.setText("Period:{:.4f} [ms]".format(g_period*1.e3))
             self.timer_counter += 1
 
     def parse_message(self, message):
@@ -364,14 +383,14 @@ class MainForm(QtWidgets.QMainWindow):
                     self.set_value(pin_name, int(value))
 
     def set_value(self, pin_name, value):
-        pin_items = [ i for i in self.t1.listAllItems() if i.name == pin_name ]
+        pin_items = [ i for i in self.d1tree.listAllItems() if i.name == pin_name ]
         for pin_item in pin_items:
             pin_item.set_value(value)
 
     def change(self, param, changes):
         print("tree changes:")
         for param, change, data in changes:
-            path = self.p3.childPath(param)
+            path = self.d3param.childPath(param)
             if path is not None:
                 childName = '.'.join(path)
             else:
@@ -386,13 +405,13 @@ class MainForm(QtWidgets.QMainWindow):
 
     def save(self):
         global g_state
-        g_state = self.p3.saveState()
+        g_state = self.d3param.saveState()
 
     def load(self):
         global g_state
-        add = self.p3['SAVE/LOAD', 'Load State', 'Add missing items']
-        rem = self.p3['SAVE/LOAD', 'Load State', 'Remove extra items']
-        self.p3.restoreState(g_state, addChildren=True, removeChildren=True)
+        add = self.d3param['SAVE/LOAD', 'Load State', 'Add missing items']
+        rem = self.d3param['SAVE/LOAD', 'Load State', 'Remove extra items']
+        self.d3param.restoreState(g_state, addChildren=True, removeChildren=True)
 
 
 def main():
