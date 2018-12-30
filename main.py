@@ -19,9 +19,11 @@ from pyqtgraph.parametertree import parameterTypes as pgptype
 global g_state
 global g_samples
 global g_period
+global g_plot_samples
 g_state = None
-g_samples = 100
+g_samples = 50
 g_period = 1.0
+g_plot_samples = 1
 
 
 
@@ -108,6 +110,7 @@ class PinTreeWidgetItem(pg.TreeWidgetItem):
     Pin Tree Widget Item
     """
     global g_samples
+    global g_period
 
     def __init__(self, name, analog=True, color='y'):
         super().__init__(name)
@@ -281,7 +284,7 @@ class MainForm(QtWidgets.QMainWindow):
         self.d2plot = d2layout.addPlot()
         self.d2plot.setLabel('left', 'Voltatge', units='V')
         self.d2plot.setLabel('bottom', 'Time', units='s')
-        self.d2plot.setXRange(0,0.5)
+        self.d2plot.setXRange(0,g_samples/g_period)
         self.d2plot.setYRange(-1, 6)
         self.d2plot_leg = self.d2plot.addLegend()
         dock2.addWidget(d2view)
@@ -358,12 +361,12 @@ class MainForm(QtWidgets.QMainWindow):
                 self.parse_message(message)
 
             # plot graph
-            if self.timer_counter % (g_samples//100):
+            if self.timer_counter % (g_plot_samples):
                 pass
             else:
                 [i.plot() for i in self.d1tree.listAllItems()]
                 new_time = time.time()
-                g_period = (new_time-self.old_time)/(g_samples//100)
+                g_period = (new_time-self.old_time)/(g_plot_samples)
                 self.old_time = new_time
                 self.d2label.setText("Period:{:.4f} [ms]".format(g_period*1.e3))
             self.timer_counter += 1
