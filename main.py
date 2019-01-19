@@ -58,7 +58,7 @@ class DeviceParameter(pgptype.GroupParameter):
     def check_device(self):
         ports = serial.tools.list_ports.comports()
         if ports:
-            ports = [i for i in ports[0] if i.count('/dev/ttyACM')]
+            ports = [i[0] for i in ports if i[0].count('/dev/ttyACM')]
         self.p_port.setLimits(ports)
 
     def has_serial(self):
@@ -68,7 +68,7 @@ class DeviceParameter(pgptype.GroupParameter):
         if self.p_btn.name() == '  Connect  ':
             port = self.p_port.value()
             ports = serial.tools.list_ports.comports()
-            if ports and port in ports[0]:
+            if ports and port in [i[0] for i in ports]:
                 try:
                     self.usb_serial = serial.Serial(port, 115200)
                 except serial.SerialException as e:
@@ -286,6 +286,7 @@ class MainForm(QtWidgets.QMainWindow):
         self.d2plot.setLabel('bottom', 'Time', units='s')
         self.d2plot.setXRange(0,g_samples/g_period)
         self.d2plot.setYRange(-1, 6)
+        self.d2plot.showGrid(x=True, y=True)
         self.d2plot_leg = self.d2plot.addLegend()
         dock2.addWidget(d2view)
 
