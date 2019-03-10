@@ -16,23 +16,14 @@ from pyqtgraph import dockarea as pgda
 from pyqtgraph import parametertree as pgpt
 from pyqtgraph.parametertree import parameterTypes as pgptype
 
-global g_state
-global g_samples
-global g_period
-global g_plot_samples
 g_state = None
-g_samples = 50
-g_period = 1.0
-g_plot_samples = 1
-
-
+g_samples = 500
+g_plot_samples = 10
 
 class DeviceParameter(pgptype.GroupParameter):
     """
     Device Parameter
     """
-    global g_samples
-    global g_period
     sigConnectionChanged = QtCore.pyqtSignal(bool)
 
     def __init__(self, **opts):
@@ -109,8 +100,6 @@ class PinTreeWidgetItem(pg.TreeWidgetItem):
     """
     Pin Tree Widget Item
     """
-    global g_samples
-    global g_period
 
     def __init__(self, name, analog=True, color='y'):
         super().__init__(name)
@@ -197,7 +186,7 @@ class PinTreeWidgetItem(pg.TreeWidgetItem):
     def plot(self):
         if self.plotitem is not None:
             y = self.get_values()
-            x = np.arange(y.size)*g_period
+            x = np.arange(y.size)
             self.plotitem.setData(x=x, y=y)
 
     def display(self):
@@ -218,8 +207,6 @@ class MainForm(QtWidgets.QMainWindow):
     """
     This is GUI main class.
     """
-    global g_samples
-    global g_period
 
     def __init__(self):
         super().__init__()
@@ -283,8 +270,8 @@ class MainForm(QtWidgets.QMainWindow):
         d2layout.nextRow()
         self.d2plot = d2layout.addPlot()
         self.d2plot.setLabel('left', 'Voltatge', units='V')
-        self.d2plot.setLabel('bottom', 'Time', units='s')
-        self.d2plot.setXRange(0,g_samples/g_period)
+        self.d2plot.setLabel('bottom', 'Samples', units='-')
+        self.d2plot.setXRange(0,g_samples)
         self.d2plot.setYRange(-1, 6)
         self.d2plot.showGrid(x=True, y=True)
         self.d2plot_leg = self.d2plot.addLegend()
@@ -367,9 +354,9 @@ class MainForm(QtWidgets.QMainWindow):
             else:
                 [i.plot() for i in self.d1tree.listAllItems()]
                 new_time = time.time()
-                g_period = (new_time-self.old_time)/(g_plot_samples)
+                delta_time = (new_time-self.old_time)/(g_plot_samples)
                 self.old_time = new_time
-                self.d2label.setText("Period:{:.4f} [ms]".format(g_period*1.e3))
+                self.d2label.setText("1sample:{:.4f} [ms]".format(delta_time*1.e3))
             self.timer_counter += 1
 
     def parse_message(self, message):
